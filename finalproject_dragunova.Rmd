@@ -1,0 +1,443 @@
+---
+title: 'Final Project: Workout Habits and Fitness Characteristics in The Gym'
+author: "dragunova elena"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(ggplot2)
+library(corrplot)
+```
+
+# 1. Data loading and Overview
+
+## Research problem and research question
+Exerecising is one of the main ways to stay healthy. Usually people do it in a gym, but they do it in  many different ways: tthey choose different types of workouts, they have different goals, train for a different amount of time and have different levels of experience. It is not obvious whjch of these characteristics are connected to the amount of energy a person spends during workout and common patterns among gym members.
+
+__Research question:__ *How are workout habits (type, duration, weekly frequency and experience level) associated with energy expenditure and fitness-related characteristics among gym members, and how do these patterns differ across groups?*
+
+## Dataset
+For this project, I chose the 'Gym Members Exercise Dataset'. The dataset was not collected by me, I downloaded it from Kaggle, where it was published by the user valakhorasani: <https://www.kaggle.com/datasets/valakhorasani/gym-members-exercise-dataset?resource=download>
+
+The Kaggle page presents it as an overview of gym members' exercise routines, physical characteristics and fitness metrics. The way the data were collected is not described in detail, so I treat it as observationaln data. Each row is one gym member with numeric physiological and workout measures and several categorical descriptors. Because the collection procedure is not documented, I unfortunately cannot say how representative the sample is.
+
+## Loading dataset
+```{r}
+gym <- read.csv("data/gym_members_exercise_tracking.csv")
+
+names(gym) <- c("age", "gender", "weight_kg", "height_m", "max_bpm", "avg_bpm", "resting_bpm", "session_hours", "calories_burned", "workout_type", "fat_percentage", "water_l", "freq_days", "experience_level", "bmi")
+
+gym$gender <- factor(gym$gender)
+gym$workout_type <- factor(gym$workout_type)
+gym$experience_level <- factor(gym$experience_level, levels = 1:3,
+                               labels = c("Level 1", "Level 2", "Level 3"))
+```
+
+## First few rows:
+```{r}
+head(gym, 10)
+```
+
+This dataset contains numeric variables describing members and their sessions (like age, weight, BMI, session duration, weekly frequency and calories burned) and categorical variables describing gender, workout type and experience level. This leads us to the conclusion that it supports comparisons of training habits and fitness-related measures.
+
+## How many observations (rows) and variables (columns) do we have?
+```{r}
+cat("Number of observations:", nrow(gym), "\n")
+cat("Number of variables:", ncol(gym), "\n")
+```
+
+## Basic summary statistics
+```{r}
+summary(gym)
+```
+
+## Check if there are any missing values
+```{r}
+colSums(is.na(gym))
+```
+
+There are no missing values, which means this dataset is suitable for further analysis
+
+## Main interest
+
+| Variable | Role | Type | Description |
+|---|---|---|---|
+| calories_burned | outcome | numeric | estimated calories burned in one session |
+| session_hours | predictor | numeric | session duration in hours |
+| freq_days | predictor | numeric (discrete) | workouts per week |
+| workout_type | grouping variable | categorical | Cardio, HIIT, Strength, Yoga |
+| experience_level | grouping variable | categorical | Level 1, 2 or 3 (3 = most experienced) |
+| weight_kg, bmi | fitness-related measures | numeric | body weight and body mass index |
+| fat_percentage | fitness-related measure | numeric | body fat percentage |
+| avg_bpm | session measure | numeric | average heart rate during the session; included as one of several workout measures |
+| gender | grouping variable | categorical | Female, Male |
+
+The main focus is on training patterns rather than heart rate alone. Body fat, weight and BMI are treated as descriptive fitness-related measures, not as direct measures of muscle mass.
+
+## Functions for plots
+My own functions for the plots are below. They are used in all sections below.
+```{r}
+pink_palette <- c("deeppink4", "deeppink", "hotpink", "lightpink1")
+
+plot_hist <- function(data, var, fill = "pink", bins = 15, title = NULL, xlab = NULL) {
+  if (is.null(xlab)) xlab <- var
+  ggplot(data, aes(x = .data[[var]])) +
+    geom_histogram(bins = bins, fill = fill, color = "white") +
+    labs(title = title, x = xlab, y = "Frequency") +
+    theme_minimal()
+}
+
+plot_box <- function(data, y, x = NULL, fill = "pink", title = NULL,
+                     xlab = NULL, ylab = NULL, colors = pink_palette) {
+  if (is.null(ylab)) ylab <- y
+  if (is.null(x)) {
+    ggplot(data, aes(y = .data[[y]])) +
+      geom_boxplot(fill = fill) +
+      labs(title = title, y = ylab) +
+      theme_minimal() +
+      theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+  } else {
+    if (is.null(xlab)) xlab <- x
+    ggplot(data, aes(x = .data[[x]], y = .data[[y]], fill = .data[[x]])) +
+      geom_boxplot() +
+      scale_fill_manual(values = colors[seq_len(nlevels(as.factor(data[[x]])))]) +
+      labs(title = title, x = xlab, y = ylab) +
+      theme_minimal() +
+      theme(legend.position = "none")
+  }
+}
+
+plot_scatter <- function(data, x, y, colour = NULL, title = NULL, #scatter of 2 num vars, optionally colored by cat
+                         xlab = NULL, ylab = NULL, colors = pink_palette) {
+  if (is.null(xlab)) xlab <- x
+  if (is.null(ylab)) ylab <- y
+  if (is.null(colour)) {
+    ggplot(data, aes(x = .data[[x]], y = .data[[y]])) +
+      geom_point(color = "hotpink", alpha = 0.6) +
+      labs(title = title, x = xlab, y = ylab) +
+      theme_minimal()
+  } else {
+    ggplot(data, aes(x = .data[[x]], y = .data[[y]], color = .data[[colour]])) +
+      geom_point(alpha = 0.7) +
+      scale_color_manual(values = colors[seq_len(nlevels(as.factor(data[[colour]])))]) +
+      labs(title = title, x = xlab, y = ylab, color = colour) +
+      theme_minimal()
+  }
+}
+
+plot_bar <- function(data, var, title = NULL, xlab = NULL, colors = pink_palette) { #barplot num of observations for each cat
+  if (is.null(xlab)) xlab <- var
+  ggplot(data, aes(x = .data[[var]], fill = .data[[var]])) +
+    geom_bar() +
+    geom_text(stat = "count", aes(label = after_stat(count)), vjust = -0.4) +
+    scale_fill_manual(values = colors[seq_len(nlevels(as.factor(data[[var]])))]) +
+    labs(title = title, x = xlab, y = "Number of members") +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+
+plot_pie <- function(data, var, title = NULL, colors = pink_palette) {
+  counts <- as.data.frame(table(data[[var]]))
+  names(counts) <- c("category", "n")
+  counts$share <- counts$n / sum(counts$n)
+  ggplot(counts, aes(x = "", y = n, fill = category)) +
+    geom_col(width = 1, color = "white") +
+    geom_text(aes(label = paste0(round(100 * share), "%")),
+              position = position_stack(vjust = 0.5)) +
+    coord_polar(theta = "y") +
+    scale_fill_manual(values = colors[seq_len(nrow(counts))]) +
+    labs(title = title, fill = var) +
+    theme_void()
+}
+```
+
+# 2. Univariate Analysis
+In this section, the distributions of the variables are explored.
+Firstly, descriptive statistics are presented, then histograms, boxplots, barplot and pie chart are used.
+
+## Descriptive statistics
+```{r}
+num_vars <- c("calories_burned", "session_hours", "freq_days", "avg_bpm", "fat_percentage", "age", "weight_kg", "water_l")
+
+desc <- t(sapply(gym[num_vars], function(x)
+  c(mean = mean(x), sd = sd(x), median = median(x), min = min(x), max = max(x))))
+round(desc, 2)
+```
+
+On average members burn about `r round(mean(gym$calories_burned))` calories per session, although the standard deviation shows that energy expenditure varies. Sessions last about `r round(mean(gym$session_hours), 2)` hours, while members train around `r round(mean(gym$freq_days), 1)` days per week on average. These summaries describe the typical training routine in the sample; I would not say that differences in averages by themselves establish that one training habit causes another.
+
+## Calories burned
+```{r}
+plot_hist(gym, "calories_burned", fill = "pink",
+          title = "Distribution of Calories Burned", xlab = "Calories burned")
+```
+
+The histogram shows that most sessions burn approximately between 600 and 1200 calories. The distribution has one hump and a longer tail to the right, and sessions with more than 1500 calories are rare
+
+```{r}
+plot_box(gym, "calories_burned", fill = "pink",
+         title = "Boxplot of Calories Burned", ylab = "Calories burned")
+```
+
+The boxplot shows the median and the spread of calories burned. Most observations are located in a relatively narrow range and only a few high values are marked as possible outliers
+
+## Session duration
+```{r}
+plot_hist(gym, "session_hours", fill = "deeppink",
+          title = "Distribution of Session Duration", xlab = "Session duration (hours)")
+```
+
+```{r}
+plot_box(gym, "session_hours", fill = "deeppink",
+         title = "Boxplot of Session Duration", ylab = "Session duration (hours)")
+```
+
+Session duration has aalmost symmetric distribution around 1.25 hours, with values from 0.5 to 2 hours. Both short and very long sessions are rare.
+
+## Body composition: body fat percentage
+```{r}
+plot_hist(gym, "fat_percentage", fill = "lightpink1",
+          title = "Distribution of Body Fat Percentage", xlab = "Body fat (%)")
+```
+
+```{r}
+plot_box(gym, "fat_percentage", fill = "lightpink1",
+         title = "Boxplot of Body Fat Percentage", ylab = "Body fat (%)")
+```
+
+This histogram describes variation in body fat percentage acrosss the sample. Body fat is included as one fitness-related characteristic, but the dataset does not measure muscle mass directly, so unfortunately it cannot tell us whether a person gained muscle through training.
+
+## Average heart rate
+```{r}
+plot_hist(gym, "avg_bpm", fill = "hotpink",
+          title = "Distribution of Average Heart Rate", xlab = "Average BPM")
+```
+
+```{r}
+plot_box(gym, "avg_bpm", fill = "hotpink",
+         title = "Boxplot of Average Heart Rate", ylab = "Average BPM")
+```
+
+Average heart rate is spread rather evenly between 120 and 170 beats per minute, without a clear peak, so there is no "typical" value in this sample.
+
+## Workout type (barplot)
+```{r}
+plot_bar(gym, "workout_type", title = "Number of Members by Workout Type",
+         xlab = "Workout type")
+```
+
+All four workout types are represented by a similar number of members: the most frequent is `r names(which.max(table(gym$workout_type)))` (`r max(table(gym$workout_type))` members) and the least frequent is `r names(which.min(table(gym$workout_type)))` (`r min(table(gym$workout_type))` members). Comparisons between workout types are not dominated by one big group.
+
+## Experience level (pie chart)
+```{r}
+plot_pie(gym, "experience_level", title = "Share of Members by Experience Level")
+```
+
+Levels 1 and 2 together make up about `r round(100 * mean(gym$experience_level != "Level 3"))`% of members, while the most experienced members (Level 3) are only about `r round(100 * mean(gym$experience_level == "Level 3"))`%
+The most experienced members are a smaller group than the other two levels
+
+# 3. Bivariate Analysis
+## Pair 1: Session duration & Calories burned
+```{r}
+plot_scatter(gym, "session_hours", "calories_burned",
+             title = "Relationship Between Session Duration and Calories Burned",
+             xlab = "Session duration (hours)", ylab = "Calories burned")
+```
+
+The scatter plot shows a strong positive linear relationship between session duration and calories burned. In general, longer workout sessions are associated with a higher number of calories burned.
+However, this correlation does not necessarily imply causation
+
+## Pair 2: Weekly workout frequency & Calories burned
+```{r}
+plot_scatter(gym, "freq_days", "calories_burned",
+             title = "Weekly Workout Frequency and Calories Burned per Session",
+             xlab = "Workout days per week", ylab = "Calories burned")
+```
+
+This plot explores whether members who train on more days per week also tend to burn more calories per session. Those who train 2 and 3 times a week tend to burn approximately the same amount of calories per session, just like those who train 4 and 5 times a week. The number of burnt calories per session is higher for those who train 4 or 5 times per week.
+
+## Pair 3: Workout type & Calories burned
+```{r}
+plot_box(gym, "calories_burned", x = "workout_type",
+          title = "Calories Burned by Workout Type",
+          xlab = "Workout type", ylab = "Calories burned")
+```
+
+The four workout types have similar distributions of calories burned. HIIT has the highest mean energy expenditure, while Yoga has the lowest. However, the difference between these means is relatively small compared with the variation within each group.
+
+# 4. Multivariate Exploration
+
+In this section, not only numeric variables are explored. We will take a look at the analysis of 3+ variables at the same time.
+```{r}
+plot_scatter(gym, "session_hours", "calories_burned", colour = "experience_level",
+             title = "Session Duration and Calories Burned by Experience Level",
+             xlab = "Session duration (hours)", ylab = "Calories burned")
+```
+
+This plot considers session duration, estimated calories and experience level together.  we can see a clear positive relationship between session duration and estimated calories burned across all three experience levels. Members with higher experience levels tend to have longer sessions, which is consistent with their higher calorie values. We can suggest that session duration is an important factor associated with energy expenditure, while experience level may also reflect differences in training habits
+
+```{r}
+plot_box(gym, "session_hours", x = "experience_level",
+         title = "Session Duration by Experience Level",
+         xlab = "Experience level", ylab = "Session duration (hours)")
+```
+
+Session duration tend to grow with experience: the median of Level 3 is clearly higher than the medians of Levels 1 and 2.
+
+Correlation matrix
+```{r}
+numeric_data <- gym[, num_vars]
+
+cor_matrix <- cor(numeric_data)
+
+round(cor_matrix, 2)
+```
+
+```{r}
+pink_palette <- colorRampPalette(
+  c("#FFF5F8", "#F4A6C1", "#C2185B") # "#F4A6C1", "#C2185B"
+)(200)
+
+corrplot(
+  cor_matrix,
+  method = "color",
+  col = pink_palette,
+  addCoef.col = "black",
+  tl.col = "black",
+  tl.cex = 0.8,
+  number.cex = 0.7
+)
+```
+
+The correlation matrix summarizes linear relationships between numeric training and fitness variables. The strongest positive correlation is between session duration and calories burned, indicating that longer sessions are strongly associated with higher estimated energy expenditure.
+Weekly workout frequency is also positively correlated with calories burned (r = 0.58) and session duratio (r = 0.64). Body fat percentage has negative correlations with calories burned (r = -0.60), session duration (r = -0.58) and weekly frequency (r = -0.54). These patterns show that several training and fitness-related variables are associated in this sample.
+
+# 5. Hypotheses
+
+Hypotheses connected to the research question:
+
+* __H1.__ Longer workout sessions are associated with more calories burned.
+* __H2.__ Average calories burned per session differ across workout types (Cardio, HIIT, Strength and Yoga)
+* __H3.__ Weekly workout frequency is associated with training-related measures, including calories burned per session.
+* __H4.__ Training experience is associated with session duration and weekly workout frequency.
+
+## H1: session duration and calories burned
+```{r}
+ct <- cor.test(gym$session_hours, gym$calories_burned)
+ct
+```
+
+```{r}
+plot_scatter(gym, "session_hours", "calories_burned", colour = "workout_type",
+             title = "Session Duration and Calories Burned by Workout Type",
+             xlab = "Session duration (hours)", ylab = "Calories burned")
+```
+
+The Pearson correlation is `r round(unname(ct$estimate), 2)` (p-value `r format.pval(ct$p.value, digits = 2)`), a very strong positive association, so the data support H1. The points of all four workout types follow the same upward line, so the link holds for every type of workout
+What I think also have to be noted is t=he fact that calories in fitness data are usually estimated by devices using time and heart rate, so a part of this very high correlation may come from the way the variable was measured.
+
+## H2: workout type and calories burned
+```{r}
+aggregate(cbind(calories_burned, session_hours) ~ workout_type, data = gym, FUN = mean)
+
+aov_type <- aov(calories_burned ~ workout_type, data = gym)
+summary(aov_type)
+p_type <- summary(aov_type)[[1]][["Pr(>F)"]][1]
+```
+
+```{r}
+plot_box(gym, "calories_burned", x = "workout_type",
+         title = "Calories Burned by Workout Type",
+         xlab = "Workout type", ylab = "Calories burned")
+```
+The mean calories burned per session range from approximately 885 for Cardio to 926 for HIIT, with Strength and Yoga averaging about 911 and 903 calories, respectively. Although HIIT has the highest sample mean, the ANOVA result is not statistically significant (since we have F = 0.949, p = 0.416). Therefore, H2 is not supported: the analysis does not provide sufficient evidence of difference in average calories burned across the four workout types. The observed differences in sample means may reflect variation within the groups rather than consistent differences between workout types
+
+## H3: weekly frequency and calories burned
+```{r}
+aggregate(cbind(calories_burned, session_hours, freq_days) ~ freq_days, data = gym, FUN = mean)
+
+freq_cor <- cor.test(gym$freq_days, gym$calories_burned)
+freq_cor
+```
+
+```{r}
+plot_box(gym, "calories_burned", x = "freq_days",
+         title = "Calories Burned by Weekly Workout Frequency",
+         xlab = "Workout days per week", ylab = "Calories burned")
+```
+The results show a moderate positive correlation between weekly workout frequency and calories burned per session. Mean calories burned increase from approximately 726 among members training 2 days a week to 1278 among those who train 5 days a week. Session duration also increases across these groups, from about 1 to 1.77 hours. This suggests that the higher calorie expenditure among more frequent trainers may be related to their longer sessions. Therefore, H3 is supported as an association, but only this correlation cannot show whether training more frequently independently increases calories burned each session
+
+## H4: experience level and training habits
+```{r}
+aggregate(cbind(session_hours, freq_days, calories_burned) ~ experience_level,
+          data = gym, FUN = mean)
+
+aov_exp <- aov(session_hours ~ experience_level, data = gym)
+summary(aov_exp)
+TukeyHSD(aov_exp)
+```
+
+```{r}
+plot_box(gym, "session_hours", x = "experience_level",
+         title = "Session Duration by Experience Level",
+         xlab = "Experience level", ylab = "Session duration (hours)")
+```
+
+This ANOVA tests whether average session duration differs across experience levels. The group means and test output should be used to decide whether H4 is supported. Even if experienced members have longer sessions, the observational dataset cannot show whether experience leads to longer workouts or people who prefer longer workouts become more experienced.
+Mean session duration rises from approximately 1.01 hours at Level 1 to 1.25 hours at Level 2 and 1.76 hours at Level 3. The ANOVA result is statistically significant (F = 797.3, p < 0.001), and the Tukey post-hoc test indicates significant differences between every pair of experience levels. Weekly workout frequency also increases across the groups, from an average of 2.48 days for Level 1 to 3.53 for Level 2 and 4.53 for Level 3. 
+These findings support H4: experience level is associated with both longer sessions and more frequent training in this sample.
+
+# 6. Statistical Modeling
+
+
+a simple linear regression with session duration as the only predictor:
+```{r}
+model <- lm(calories_burned ~ session_hours, data = gym)
+
+summary(model)
+```
+```{r}
+ggplot(gym, aes(x = session_hours, y = calories_burned)) +
+  geom_point(color = "hotpink", alpha = 0.5) +
+  geom_smooth(method = "lm", formula = y ~ x, se = TRUE,
+              color = "deeppink4", fill = "pink") +
+  labs(
+    title = "Linear Regression: Calories Burned vs Session Duration",
+    x = "Session duration (hours)",
+    y = "Calories burned"
+  ) +
+  theme_minimal()
+```
+
+On average, each additional hour of training is associated with about `r round(coef(model)[2])` additional calories burned, and the model explains about `r round(100 * summary(model)$r.squared)`% of the variation of calories
+
+Now a multiple regression, where workout types, experience levels, weekly frequency and age are added:
+```{r}
+model2 <- lm(calories_burned ~ session_hours + freq_days + age + workout_type + experience_level,
+             data = gym)
+
+summary(model2)
+```
+
+The multiple regression examines whether session duration remains associated with calories burned after accounting for weekly frequency, age, workout types and experience levels. Session duration remains strongly associated with calories burned: each additional hour is associated with approximately 724 additional calories holding the other variables constant. Age has a negative association with estimated calories burned. In contrast, weekly frequency, workout types and experience level are not statistically significant predictors in this model. The model explains about 84% of the variation in calories burned (adjusted R² = 0.842). These results suggest that session duration is the main predictor among the variables included
+
+# Conclusion
+
+## Main findings
+
+The Gym Members dataset contains `r nrow(gym)` observations of numeric measurements and three categorical variables, with no missing values. The analysis led to the following conclusions:
+
+1. Session duration has a very strong positive correlation with calories burned. The simple linear regression explains approximately 82% of the variation in estimated calories burned.
+2. Members who train more days per week tend to have higher calorie expenditure per session (r = 0.58). They also tend to have longer sessions, which may help explain this association. In the multiple regression, weekly frequency is not a statistically significant predictor after controlling for session duration and other variables.
+3. More experienced members tend to train longer and more frequently. Mean session duration increases from approximately 1.01 hours at Level 1 to 1.76 hours at Level 3, with statistically significant differences between all three experience levels.
+4. The multiple regression explains approximately 84% of the variation in estimated calories burned. Session duration and age are statistically significant predictors in this model, while workout type, weekly frequency and experience level are not. These findings describe associations in the dataset and should not be interpreted as causal effects.
+5. The mean calories burned per session range from approximately 885 for Cardio to 926 for HIIT. However, the ANOVA result is not statistically significant (F = 0.949, p = 0.416)
+
+# References
+
+Kaggle dataset: 'Gym Members Exercise Dataset' (author: valakhorasani). <https://www.kaggle.com/datasets/valakhorasani/gym-members-exercise-dataset/data>
+
